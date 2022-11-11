@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>  
+<mod name="Exp Scroll System" author="Roddet" contact="otland.net" enabled="yes">  
+<config name="scrolls"><![CDATA[
+	eventsScroll = {}
+	configScroll = {
+		-- donate scrolls config
+		vipScrollUsesPerDay = 2,
+		vipScrollStorage = 94502,
+		vipScrollsStoragetime = 94503,
+		vipScrollsBlockTime = 24 * 60 * 60, -- hours
+
+		-- general config
+		storageTime = 94500,
+		storagePercent = 94501,
+
+		[5743] = {
+			percent = 10,
+			time = 2 * 60 * 60, -- hours
+		},
+		
+		[5744] = {
+			percent = 15,
+			time = 2 * 60 * 60
+		},
+	}
+
+	local plural = function(int, str)
+	    return int..' '..(int <= 1 and str:sub(1, #str - 1) or str)
+	end
+
+	function timeFormat(timestamp)
+	    local ret = {}
+	    if timestamp then
+	        local time = timestamp
+	        local hours, minutes, seconds = math.floor (time / 3600), math.floor ((time - ((math.floor (time / 3600)) * 3600))/ 60), time - ((math.floor (time/60)) * 60)
+	        if (hours > 0) then
+	            ret[1] = plural(hours, 'hours')
+	            if (time % 3600) ~= 0 then
+	                ret[2] = plural(minutes, 'minutes')
+	            end
+	        elseif (minutes > 0) then
+	            ret[1] = plural(minutes, 'minutes')
+	            if (time % 60) ~= 0 then
+	                ret[2] = plural(seconds, 'seconds')
+	            end
+	        else
+	            ret[1] = plural(seconds, 'seconds')
+	        end
+	    end
+	    return table.concat(ret, ' and ')
+	end
+
+	function terminateBonus(cid, storage, percent)
+		if isPlayer(cid) then
+			doPlayerSetRate(cid, SKILL__LEVEL, math.max(1, getPlayerRates(cid)[SKILL__LEVEL] - (getPlayerStorageValue(cid, percent) / 100)))
+			doPlayerSendTextMessage(cid, MESSAGE_STATUS_CONSOLE_RED, "Your extra experience from a scroll has been ended.")
+			setPlayerStorageValue(cid, storage, 0)
+			setPlayerStorageValue(cid, percent, 0)
+		end
+	end
+
+]]></config>
+
+<action itemid="5743;5744" event="script"><![CDATA[
+	domodlib('scrolls')
+	function onUse(cid, item, fromPosition, itemEx, toPosition)
+		local extra = configScroll[item.itemid]
+		if not extra then
+			return doPlayerSendCancel(cid, "This scroll is not working, please contact an administrator.")
+		end
+
+		if getPlayerStorageValue(cid, configScroll.storageTime) > os.time() then
+			return doPlayerSendTextMessage(cid, MESSAGE_STATUS_CONSOLE_ORANGE, "You cannot use a experience scroll again until ".. timeFormat(getPlayerStorageValue(cid, configScroll.storageTime) - os.time()) ..".")
+		end
+
+		if getItemAttribute(item.uid, "donate") then
+			if tonumber(getPlayerStorageValue(cid, configScroll.vipScrollsStoragetime)) > os.time() then
+				return doPlayerSendTextMessage(cid, MESSAGE_STATUS_CONSOLE_ORANGE, "You cannot use donated experience scrolls again until ".. timeFormat(getPlayerStorageValue(cid, configScroll.vipScrollsStoragetime) - os.time()) ..".")
+			end
+			setPlayerStorageValue(cid, configScroll.vipScrollStorage, math.max(0, tonumber(getPlayerStorageValue(cid, configScroll.vipScrollStorage))) + 1)
+			if tonumber(getPlayerStorageValue(cid, configScroll.vipScrollStorage)) >= configScroll.vipScrollUsesPerDay then
+				setPlayerStorageValue(cid, configScroll.vipScrollsStoragetime, os.time() + configScroll.vipScrollsBlockTime)
+				setPlayerStorageValue(cid, configScroll.vipScrollStorage, 0)
+			end
+		end
+
+		setPlayerStorageValue(cid, configScroll.storageTime, os.time() + extra.time)
+		setPlayerStorageValue(cid, configScroll.storagePercent, extra.percent)
+		doPlayerSetRate(cid, SKILL__LEVEL, getPlayerRates(cid)[SKILL__LEVEL] + (extra.percent / 100))
+		doPlayerSendTextMessage(cid, MESSAGE_STATUS_CONSOLE_BLUE, "You have activated a experience scroll for "..timeFormat(extra.time).." (+"..extra.percent.."% experience).")
+
+		eventsScroll[cid] = addEvent(terminateBonus, extra.time * 1000, cid, configScroll.storageTime, configScroll.storagePercent)
+		print(eventsScroll[cid])
+		doRemoveItem(item.uid, 1)
+		return true
+	end
+]]></action>
+
+
+<event type="login" name="LoginScroll" event="script"><![CDATA[
+	domodlib('scrolls')
+	function onLogin(cid)
+		if tonumber(getPlayerStorageValue(cid, configScroll.storageTime)) > 0 then
+			if getPlayerStorageValue(cid, configScroll.storageTime) <= os.time() then
+				setPlayerStorageValue(cid, configScroll.storageTime, 0)
+				setPlayerStorageValue(cid, configScroll.storagePercent, 0)
+
+				-- workaround to show message after last login string
+				addEvent(function() 
+					doPlayerSendTextMessage(cid, MESSAGE_STATUS_CONSOLE_RED, "Your bonus experience from exp scroll has been ended.")
+				end, 50)
+				return true
+			end
+
+			local remainTime = getPlayerStorageValue(cid, configScroll.storageTime) - os.time()
+			doPlayerSetRate(cid, SKILL__LEVEL, getPlayerRates(cid)[SKILL__LEVEL] + (getPlayerStorageValue(cid, configScroll.storagePercent) / 100))
+			eventsScroll[cid] = addEvent(terminateBonus, remainTime * 1000, cid, configScroll.storageTime, configScroll.storagePercent)
+
+			-- workaround to show message after last login string
+			addEvent(function() 
+				doPlayerSendTextMessage(cid, MESSAGE_STATUS_CONSOLE_BLUE, "You still have an active experience scroll for "..timeFormat(remainTime).." (+"..getPlayerStorageValue(cid, configScroll.storagePercent).."% experience).") 
+			end, 50)
+		end
+		return true
+	end
+]]></event>
+
+<event type="logout" name="LogoutScroll" event="script"><![CDATA[
+	domodlib('scrolls')
+    function onLogout(cid)
+    	if eventsScroll[cid] then
+    		stopEvent(eventsScroll[cid])
+    	end
+        return true
+    end
+]]></event>
+
+</mod>
